@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <!-- Ball body -->
+  <ellipse cx="50" cy="50" rx="38" ry="24" fill="#8B4513" stroke="#5C2E00" stroke-width="2"/>
+  <!-- Highlight -->
+  <ellipse cx="42" cy="40" rx="14" ry="7" fill="#A0522D" opacity="0.5"/>
+  <!-- Lace (vertical centre line) -->
+  <line x1="50" y1="27" x2="50" y2="73" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+  <!-- Lace cross stitches -->
+  <line x1="45" y1="34" x2="55" y2="34" stroke="white" stroke-width="2" stroke-linecap="round"/>
+  <line x1="43" y1="42" x2="57" y2="42" stroke="white" stroke-width="2" stroke-linecap="round"/>
+  <line x1="43" y1="50" x2="57" y2="50" stroke="white" stroke-width="2" stroke-linecap="round"/>
+  <line x1="43" y1="58" x2="57" y2="58" stroke="white" stroke-width="2" stroke-linecap="round"/>
+  <line x1="45" y1="66" x2="55" y2="66" stroke="white" stroke-width="2" stroke-linecap="round"/>
+  <!-- Ball outline / seam -->
+  <ellipse cx="50" cy="50" rx="38" ry="24" fill="none" stroke="#5C2E00" stroke-width="2"/>
+  <!-- Horizontal seam line -->
+  <path d="M 12 50 Q 30 38 50 38 Q 70 38 88 50" fill="none" stroke="#5C2E00" stroke-width="1.2"/>
+  <path d="M 12 50 Q 30 62 50 62 Q 70 62 88 50" fill="none" stroke="#5C2E00" stroke-width="1.2"/>
+</svg>

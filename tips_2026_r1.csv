@@ -1,0 +1,9 @@
+home_team,away_team,predicted_winner,home_win_prob,away_win_prob,confidence
+Dolphins,South Sydney Rabbitohs,Dolphins,92.4,7.6,92.4
+Brisbane Broncos,Penrith Panthers,Penrith Panthers,15.4,84.6,84.6
+Cronulla Sharks,Gold Coast Titans,Cronulla Sharks,77.0,23.0,77.0
+Manly Sea Eagles,Canberra Raiders,Manly Sea Eagles,60.9,39.1,60.9
+New Zealand Warriors,Sydney Roosters,New Zealand Warriors,58.6,41.4,58.6
+Canterbury Bulldogs,St George Illawarra Dragons,Canterbury Bulldogs,55.3,44.7,55.3
+Melbourne Storm,Parramatta Eels,Parramatta Eels,46.9,53.1,53.1
+Newcastle Knights,North Queensland Cowboys,Newcastle Knights,51.5,48.5,51.5
