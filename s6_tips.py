@@ -25,10 +25,25 @@ import requests
 
 warnings.filterwarnings("ignore")
 
-SCRIPT_DIR  = os.path.dirname(os.path.abspath(__file__))
-DATA_PATH   = os.path.join(SCRIPT_DIR, "nrl_source_data.csv")
-MODEL_PATH  = os.path.join(SCRIPT_DIR, "nrl_model.pkl")
-ODDS_API_KEY = os.environ.get("ODDS_API_KEY", "")   # optional — set in env for live odds
+SCRIPT_DIR         = os.path.dirname(os.path.abspath(__file__))
+DATA_PATH          = os.path.join(SCRIPT_DIR, "nrl_source_data.csv")
+MODEL_PATH         = os.path.join(SCRIPT_DIR, "nrl_model.pkl")
+MODEL_PATH_NO_ODDS = os.path.join(SCRIPT_DIR, "nrl_model_no_odds.pkl")
+
+def _load_odds_key() -> str:
+    """Read ODDS_API_KEY from env, falling back to ~/.claude/settings.json."""
+    key = os.environ.get("ODDS_API_KEY", "")
+    if key:
+        return key
+    try:
+        import json as _json
+        cfg = os.path.expanduser("~/.claude/settings.json")
+        with open(cfg) as _f:
+            return _json.load(_f).get("env", {}).get("ODDS_API_KEY", "")
+    except Exception:
+        return ""
+
+ODDS_API_KEY = _load_odds_key()
 
 CURRENT_SEASON = datetime.now().year
 
@@ -50,7 +65,7 @@ def _fetch_squad_info(games: list[dict], season: int, round_num: int) -> dict[tu
     Returns empty dict on any failure (callers fall back to 0s).
     """
     try:
-        from u3_squad import SquadTracker, fetch_players, KEY_WINDOW
+        from u3_squad import SquadTracker, fetch_players, KEY_WINDOW, KEY_NUMBERS
     except Exception:
         return {}
 
@@ -77,6 +92,29 @@ def _fetch_squad_info(games: list[dict], season: int, round_num: int) -> dict[tu
             return {}
 
     tracker = SquadTracker()
+    name_lookup: dict[int, str] = {}  # playerId -> "F. Lastname"
+
+    def _collect_names(player_list):
+        for p in player_list:
+            pid = p.get("playerId")
+            if pid:
+                name_lookup[pid] = f"{p.get('firstName', '?')[0]}. {p.get('lastName', '?')}"
+
+    NUM_TO_POS = {1: "Fullback", 6: "Five-Eighth", 7: "Halfback", 9: "Hooker"}
+
+    def _absent_names(team, players):
+        starter_map = {p["number"]: p for p in players if p.get("number") in KEY_NUMBERS}
+        absent = []
+        for num in sorted(KEY_NUMBERS):
+            regular_id = tracker.regular_starter(team, num)
+            if regular_id is None:
+                continue
+            actual = starter_map.get(num)
+            if actual is None or actual.get("playerId") != regular_id:
+                pos = NUM_TO_POS.get(num, f"#{num}")
+                reg_name = name_lookup.get(regular_id, "unknown")
+                absent.append(f"{reg_name} ({pos})")
+        return ", ".join(absent)
 
     # Seed tracker with last KEY_WINDOW completed rounds for baselines
     seed_start = max(1, round_num - KEY_WINDOW)
@@ -87,6 +125,8 @@ def _fetch_squad_info(games: list[dict], season: int, round_num: int) -> dict[tu
         for (ht, at), url in url_map.items():
             players = fetch_players(url)
             if players.get("home") or players.get("away"):
+                _collect_names(players.get("home", []))
+                _collect_names(players.get("away", []))
                 tracker.update(ht, players.get("home", []))
                 tracker.update(at, players.get("away", []))
         import time as _time
@@ -103,14 +143,18 @@ def _fetch_squad_info(games: list[dict], season: int, round_num: int) -> dict[tu
         away = game["away_team"]
         mc_url = url_map.get((home, away)) or url_map.get((away, home))
         if not mc_url:
-            result[(home, away)] = (0, 0)
+            result[(home, away)] = (0, 0, "", "")
             continue
         players = fetch_players(mc_url)
         home_players = players.get("home", [])
         away_players = players.get("away", [])
+        _collect_names(home_players)
+        _collect_names(away_players)
         home_out = tracker.key_players_out(home, home_players)
         away_out = tracker.key_players_out(away, away_players)
-        result[(home, away)] = (home_out, away_out)
+        home_names = _absent_names(home, home_players)
+        away_names = _absent_names(away, away_players)
+        result[(home, away)] = (home_out, away_out, home_names, away_names)
 
     return result
 
@@ -227,7 +271,7 @@ def best_round_for_odds(season: int, odds_map: dict) -> int:
     odds_teams = set(t for pair in odds_map for t in pair)
     base = estimate_current_round(season)
     best_round, best_score = base, -1
-    for rnd in [base, base - 1, base + 1]:
+    for rnd in [base, base - 1]:
         if rnd < 1 or rnd > 27:
             continue
         games = fetch_draw_nrlcom(season, rnd)
@@ -338,6 +382,33 @@ def _parse_nrl_html_draw(html: str, round_num: int, season: int) -> list[dict]:
     return games
 
 
+def _fetch_draw_from_csv(season: int, round_num: int) -> list[dict]:
+    """Read fixtures for a round from nrl_source_data.csv (fallback when API unavailable)."""
+    if not os.path.exists(DATA_PATH):
+        return []
+    try:
+        df   = pd.read_csv(DATA_PATH, usecols=['season', 'round', 'home_team', 'away_team', 'venue', 'date'])
+        mask = (df['season'].astype(int) == season) & (df['round'].astype(int) == round_num)
+        rows = df[mask]
+        if rows.empty:
+            return []
+        print(f"  [fallback] Loaded {len(rows)} fixtures from local CSV.")
+        return [
+            {
+                'season':    season,
+                'round':     round_num,
+                'home_team': canonical(str(row['home_team'])),
+                'away_team': canonical(str(row['away_team'])),
+                'venue':     str(row.get('venue', '')),
+                'date':      str(row.get('date', '')),
+            }
+            for _, row in rows.iterrows()
+        ]
+    except Exception as e:
+        print(f"  [fallback] CSV read failed: {e}")
+        return []
+
+
 # ─── LADDER FETCHER ───────────────────────────────────────────────────────────
 
 def fetch_ladder_nrlcom(season: int) -> dict[str, dict]:
@@ -367,6 +438,23 @@ def fetch_ladder_nrlcom(season: int) -> dict[str, dict]:
 def _parse_nrl_ladder(data: dict) -> dict:
     ladder = {}
     try:
+        # New API format (2025+): positions[].stats + teamNickname
+        if "positions" in data:
+            for i, row in enumerate(data["positions"]):
+                team = canonical(row.get("teamNickname") or "")
+                stats = row.get("stats", {})
+                if team:
+                    ladder[team] = {
+                        "pos":         i + 1,
+                        "wins":        int(stats.get("wins", 0)),
+                        "losses":      int(stats.get("lost", 0)),
+                        "draws":       int(stats.get("drawn", 0)),
+                        "pts_for":     float(stats.get("points for", 0)),
+                        "pts_against": float(stats.get("points against", 0)),
+                    }
+            return ladder
+
+        # Legacy API format: ladderStandings / standings
         rows = (
             data.get("ladderStandings") or
             data.get("ladder", {}).get("standings") or
@@ -569,11 +657,15 @@ def _fill_advanced_stats(form: dict, hist: pd.DataFrame, team: str, before_date,
     ].tail(5)
 
     for col in stat_cols:
-        pcol = f"{prefix}_{col}"
-        if pcol in hist.columns and len(team_rows) > 0:
-            vals = team_rows[pcol].dropna()
-            if len(vals) > 0:
-                form[col] = vals.mean()
+        vals = []
+        for _, r in team_rows.iterrows():
+            # Use the correct home/away prefix for each historical row
+            p = "home" if r["home_team"] == team else "away"
+            pcol = f"{p}_{col}"
+            if pcol in hist.columns and pd.notna(r[pcol]) and r[pcol] != 0:
+                vals.append(r[pcol])
+        if vals:
+            form[col] = np.mean(vals)
     return form
 
 
@@ -758,32 +850,40 @@ def build_game_row(
 
 # ─── PREDICT ──────────────────────────────────────────────────────────────────
 
-def run_predictions(games_df: pd.DataFrame) -> pd.DataFrame:
+def run_predictions(games_df: pd.DataFrame, use_odds: bool = True) -> pd.DataFrame:
     """Load model, engineer features, output predictions."""
     # Import here to avoid circular dep
     sys.path.insert(0, SCRIPT_DIR)
     from m5_nrl import engineer_features, FEATURE_COLS
 
-    if not os.path.exists(MODEL_PATH):
-        # Fall back to market implied probability from odds
-        def odds_prob(row):
-            h, a = row["market_home_win_odds"], row["market_away_win_odds"]
-            if h > 1 and a > 1:
-                hi = 1 / h; ai = 1 / a; total = hi + ai
-                return round(hi / total * 100, 1), round(ai / total * 100, 1)
-            return 50.0, 50.0
-        games_df = games_df.copy()
-        probs = games_df.apply(odds_prob, axis=1, result_type="expand")
-        games_df["home_win_prob"] = probs[0]
-        games_df["away_win_prob"] = probs[1]
-        games_df["predicted_winner"] = np.where(
-            games_df["home_win_prob"] >= games_df["away_win_prob"],
-            games_df["home_team"], games_df["away_team"]
-        )
-        games_df["confidence"] = np.maximum(games_df["home_win_prob"], games_df["away_win_prob"])
-        return games_df
+    model_path = MODEL_PATH if use_odds else MODEL_PATH_NO_ODDS
 
-    with open(MODEL_PATH, "rb") as f:
+    if not os.path.exists(model_path):
+        if use_odds:
+            # Fall back to market implied probability from odds
+            def odds_prob(row):
+                h, a = row["market_home_win_odds"], row["market_away_win_odds"]
+                if h > 1 and a > 1:
+                    hi = 1 / h; ai = 1 / a; total = hi + ai
+                    return round(hi / total * 100, 1), round(ai / total * 100, 1)
+                return 50.0, 50.0
+            games_df = games_df.copy()
+            probs = games_df.apply(odds_prob, axis=1, result_type="expand")
+            games_df["home_win_prob"] = probs[0]
+            games_df["away_win_prob"] = probs[1]
+            games_df["predicted_winner"] = np.where(
+                games_df["home_win_prob"] >= games_df["away_win_prob"],
+                games_df["home_team"], games_df["away_team"]
+            )
+            games_df["confidence"] = np.maximum(games_df["home_win_prob"], games_df["away_win_prob"])
+            return games_df
+        else:
+            raise FileNotFoundError(
+                f"No no-odds model found at {model_path}. "
+                "Use 'Retrain (No Odds)' to train it first."
+            )
+
+    with open(model_path, "rb") as f:
         model, feature_cols = pickle.load(f)
 
     df_feat = engineer_features(games_df)
@@ -801,11 +901,13 @@ def run_predictions(games_df: pd.DataFrame) -> pd.DataFrame:
 
 # ─── OUTPUT ───────────────────────────────────────────────────────────────────
 
-def print_tips(results: pd.DataFrame, round_num: int, season: int, data_source: str):
+def print_tips(results: pd.DataFrame, round_num: int, season: int, data_source: str, use_odds: bool = True):
     results = results.sort_values("date")
-    print(f"\nNRL {season} — ROUND {round_num} TIPS  [{data_source}]")
+    model_label = "with odds" if use_odds else "no odds"
+    print(f"\nNRL {season} — ROUND {round_num} TIPS  [{data_source}] [{model_label}]")
     print("=" * 70)
-    no_model = not os.path.exists(MODEL_PATH)
+    model_path = MODEL_PATH if use_odds else MODEL_PATH_NO_ODDS
+    no_model = not os.path.exists(model_path)
     if no_model:
         print("  [odds-only mode — train the model with more historical data for better picks]\n")
     for _, row in results.iterrows():
@@ -821,16 +923,21 @@ def print_tips(results: pd.DataFrame, round_num: int, season: int, data_source: 
         notes = []
         h_out = int(row.get("home_key_players_out", 0))
         a_out = int(row.get("away_key_players_out", 0))
+        h_names = str(row.get("home_players_out_names", "") or "")
+        a_names = str(row.get("away_players_out_names", "") or "")
         if h_out > 0:
-            notes.append(f"{row['home_team']}: {h_out} key player{'s' if h_out>1 else ''} out")
+            label = h_names if h_names else f"{h_out} key player{'s' if h_out>1 else ''} out"
+            notes.append(f"{row['home_team']}: {label} out")
         if a_out > 0:
-            notes.append(f"{row['away_team']}: {a_out} key player{'s' if a_out>1 else ''} out")
+            label = a_names if a_names else f"{a_out} key player{'s' if a_out>1 else ''} out"
+            notes.append(f"{row['away_team']}: {label} out")
         if notes:
             print(f"  ⚠  {' | '.join(notes)}")
         print()
     print("=" * 70)
-    tips_list = results[["home_team", "away_team", "predicted_winner", "home_win_prob", "away_win_prob", "confidence"]]
-    out_path = os.path.join(SCRIPT_DIR, f"tips_{season}_r{round_num}.csv")
+    tips_list = results[["date", "home_team", "away_team", "predicted_winner", "home_win_prob", "away_win_prob", "confidence"]]
+    suffix = "" if use_odds else "_no_odds"
+    out_path = os.path.join(SCRIPT_DIR, f"tips_{season}_r{round_num}{suffix}.csv")
     tips_list.to_csv(out_path, index=False)
     print(f"Saved → {out_path}\n")
 
@@ -941,48 +1048,56 @@ def auto_save_last_round(season: int, tips_round: int) -> bool:
     return True
 
 
-def retrain():
+def retrain(use_odds: bool = True):
     """Re-train the model in-process."""
     sys.path.insert(0, SCRIPT_DIR)
     from m5_nrl import load_data, train
-    print("Retraining model...")
+    label = "with odds" if use_odds else "no odds"
+    print(f"Retraining model ({label})...")
     df = load_data(DATA_PATH)
-    train(df)
+    train(df, use_odds=use_odds)
 
 
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--season", type=int, default=CURRENT_SEASON)
-    parser.add_argument("--round",  type=int, default=None)
+    parser.add_argument("--season",   type=int, default=CURRENT_SEASON)
+    parser.add_argument("--round",    type=int, default=None)
+    parser.add_argument("--no-odds",  action="store_true",
+                        help="Use the no-odds model; skip fetching live odds")
     args = parser.parse_args()
 
-    season = args.season
+    season   = args.season
+    use_odds = not args.no_odds
 
-    # 1. Fetch odds first so we can find the right round
+    # 1. Fetch odds first so we can find the right round (skipped in no-odds mode)
     odds_map = {}
-    if ODDS_API_KEY:
+    if use_odds and ODDS_API_KEY:
         print("Fetching odds...")
         odds_map = fetch_odds()
         print(f"  Odds loaded for {len(odds_map)} games.")
+    elif not use_odds:
+        print("  [no-odds mode — skipping live odds fetch]")
 
     round_num = args.round or best_round_for_odds(season, odds_map)
 
     # 2. Auto-save last round's results and retrain if anything new
     new_data = auto_save_last_round(season, round_num)
     if new_data:
-        retrain()
+        retrain(use_odds=use_odds)
 
     print(f"\nFetching NRL {season} Round {round_num} draw...")
 
-    # 3. Fetch draw
+    # 3. Fetch draw — fall back to CSV for past rounds when API is unavailable
     games = fetch_draw_nrlcom(season, round_num)
     data_source = "nrl.com"
     if not games:
-        print("  [!] Could not fetch draw from nrl.com — check your internet connection")
+        games = _fetch_draw_from_csv(season, round_num)
+        data_source = "local CSV"
+    if not games:
+        print("  [!] Could not fetch draw from nrl.com or local CSV")
         print(f"      You can manually create:  round{round_num}.csv  using round_template.csv")
-        print(f"      Then run:  python nrl_model.py --predict round{round_num}.csv")
         sys.exit(1)
 
     print(f"  Found {len(games)} games.")
@@ -1013,15 +1128,17 @@ def main():
     for g in games:
         row = build_game_row(g, hist, ladder, odds_map)
         # Inject squad data if available
-        h_out, a_out = squad_info.get((g["home_team"], g["away_team"]), (0, 0))
-        row["home_key_players_out"] = h_out
-        row["away_key_players_out"] = a_out
+        sd = squad_info.get((g["home_team"], g["away_team"]), (0, 0, "", ""))
+        row["home_key_players_out"] = sd[0]
+        row["away_key_players_out"] = sd[1]
+        row["home_players_out_names"] = sd[2] if len(sd) > 2 else ""
+        row["away_players_out_names"] = sd[3] if len(sd) > 3 else ""
         rows.append(row)
     games_df = pd.DataFrame(rows)
 
     # 7. Predict and print
-    results = run_predictions(games_df)
-    print_tips(results, round_num, season, data_source)
+    results = run_predictions(games_df, use_odds=use_odds)
+    print_tips(results, round_num, season, data_source, use_odds=use_odds)
 
 
 if __name__ == "__main__":
