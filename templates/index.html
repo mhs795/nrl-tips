@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NRL Tips</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:     #1a1a2e;
+      --panel:  #16213e;
+      --accent: #0f3460;
+      --green:  #00b894;
+      --yellow: #fdcb6e;
+      --red:    #d63031;
+      --white:  #dfe6e9;
+      --grey:   #636e72;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--white);
+      font-family: "Segoe UI", system-ui, sans-serif;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--accent);
+      padding: 14px 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+    header h1 { font-size: 1.4rem; font-weight: 700; }
+
+    /* ── Toolbar ── */
+    .toolbar {
+      background: var(--panel);
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+    .btn-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+    button {
+      font-family: inherit;
+      font-size: 1rem;
+      font-weight: 600;
+      padding: 13px 20px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: filter 0.15s;
+    }
+    button:hover  { filter: brightness(1.15); }
+    button:active { filter: brightness(0.9); }
+    button:disabled { background: var(--grey) !important; color: #aaa !important; cursor: not-allowed; filter: none; }
+
+    .btn-tips        { background: #1565c0; color: var(--white); }
+    .btn-tips-no     { background: #1e88e5; color: #000; }
+    .btn-compare     { background: #64b5f6; color: #000; }
+    .btn-model       { background: #004d40; color: var(--white); }
+    .btn-collect-new { background: #00796b; color: var(--white); }
+    .btn-collect-all { background: #00897b; color: #000; }
+    .btn-retrain     { background: #26a69a; color: #000; }
+    .btn-retrain-no  { background: #80cbc4; color: #000; }
+    .btn-cancel      { background: var(--red); color: var(--white); display: none; }
+    .btn-clear       { background: var(--panel); color: var(--grey); border: 1px solid var(--grey); }
+
+    .round-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-left: auto;
+    }
+    .round-wrap label { font-size: 1rem; color: var(--white); white-space: nowrap; }
+    .round-wrap input {
+      width: 72px;
+      background: var(--accent);
+      color: var(--white);
+      border: none;
+      border-radius: 6px;
+      padding: 10px 10px;
+      font-size: 1rem;
+      font-family: inherit;
+      text-align: center;
+    }
+
+    /* ── Output ── */
+    .output-wrap {
+      flex: 1;
+      overflow-y: auto;
+      padding: 14px 16px;
+    }
+    #output {
+      font-family: "Courier New", monospace;
+      font-size: 0.85rem;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .c-white  { color: var(--white); }
+    .c-yellow { color: var(--yellow); font-weight: 700; }
+    .c-green  { color: var(--green); font-weight: 700; }
+    .c-red    { color: var(--red); }
+    .c-grey   { color: var(--grey); }
+
+    /* ── Status bar ── */
+    footer {
+      background: var(--accent);
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+    #status { font-size: 0.9rem; flex: 1; }
+
+    .spinner {
+      display: none;
+      width: 18px;
+      height: 18px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: var(--green);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      flex-shrink: 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+<header>
+  <span style="font-size:1.8rem">🏉</span>
+  <h1>NRL Tips</h1>
+</header>
+
+<div class="toolbar">
+  <!-- Row 1 -->
+  <div class="btn-row">
+    <button class="btn-tips"    onclick="run('tips')">Tips (with Odds)</button>
+    <button class="btn-tips-no" onclick="run('tips_no_odds')">Tips (No Odds)</button>
+    <button class="btn-compare" onclick="run('compare')">Compare Models</button>
+    <div class="round-wrap">
+      <label for="round">Round:</label>
+      <input id="round" type="text" value="auto">
+    </div>
+  </div>
+  <!-- Row 2 -->
+  <div class="btn-row">
+    <button class="btn-model"       onclick="showModels()">Show Models</button>
+    <button class="btn-collect-new" onclick="run('collect_new')">Collect New Data</button>
+    <button class="btn-collect-all" onclick="run('collect_all')">Collect All Data</button>
+    <button class="btn-retrain"     onclick="run('retrain')">Retrain (with Odds)</button>
+    <button class="btn-retrain-no"  onclick="run('retrain_no_odds')">Retrain (No Odds)</button>
+    <button class="btn-cancel"      onclick="cancel()">Cancel</button>
+    <button class="btn-clear"       onclick="clearOutput()">Clear</button>
+  </div>
+</div>
+
+<div class="output-wrap">
+  <div id="output"></div>
+</div>
+
+<footer>
+  <span id="status">Ready</span>
+  <div class="spinner" id="spinner"></div>
+</footer>
+
+<script>
+  const output  = document.getElementById("output");
+  const statusEl = document.getElementById("status");
+  const spinner  = document.getElementById("spinner");
+  const cancelBtn = document.querySelector(".btn-cancel");
+
+  const actionBtns = [
+    ...document.querySelectorAll(
+      ".btn-tips,.btn-tips-no,.btn-compare,.btn-collect-new,.btn-collect-all,.btn-retrain,.btn-retrain-no"
+    )
+  ];
+
+  let es = null;
+
+  function setBusy(label) {
+    statusEl.textContent = label;
+    spinner.style.display = "block";
+    cancelBtn.style.display = "inline-block";
+    actionBtns.forEach(b => b.disabled = true);
+  }
+
+  function setIdle(label) {
+    statusEl.textContent = label;
+    spinner.style.display = "none";
+    cancelBtn.style.display = "none";
+    actionBtns.forEach(b => b.disabled = false);
+  }
+
+  function clearOutput() {
+    output.innerHTML = "";
+  }
+
+  function classify(line) {
+    const l = line.trim();
+    if (l.startsWith("NRL ") || l.includes("TIPS") || l.startsWith("===")) return "c-yellow";
+    if (l.startsWith("TIP:")) return "c-green";
+    if (l.includes("⚡")) return "c-yellow";
+    if (/\berror\b/i.test(l)) return "c-red";
+    if (l.startsWith("[") || l.includes("Could not")) return "c-grey";
+    return "c-white";
+  }
+
+  function appendLine(text, cls) {
+    const span = document.createElement("span");
+    span.className = cls;
+    span.textContent = text + "\n";
+    output.appendChild(span);
+    output.parentElement.scrollTop = output.parentElement.scrollHeight;
+  }
+
+  function run(action) {
+    if (es) { es.close(); es = null; }
+    clearOutput();
+    const rnd = document.getElementById("round").value.trim() || "auto";
+    const url = `/stream?action=${encodeURIComponent(action)}&round=${encodeURIComponent(rnd)}`;
+
+    es = new EventSource(url);
+    es.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === "status") {
+        setBusy(msg.text);
+      } else if (msg.type === "stdout") {
+        appendLine(msg.text, classify(msg.text));
+      } else if (msg.type === "stderr") {
+        appendLine(msg.text, "c-red");
+      } else if (msg.type === "error") {
+        appendLine(msg.text, "c-red");
+      } else if (msg.type === "done") {
+        es.close(); es = null;
+        setIdle(msg.status || "Done");
+      }
+    };
+    es.onerror = () => {
+      es.close(); es = null;
+      setIdle("Connection error");
+    };
+  }
+
+  async function showModels() {
+    clearOutput();
+    setBusy("Loading model info...");
+    try {
+      const resp = await fetch("/model_info");
+      const data = await resp.json();
+      data.lines.forEach(line => appendLine(line, classify(line)));
+      setIdle("Ready");
+    } catch (err) {
+      appendLine("Failed to load model info: " + err, "c-red");
+      setIdle("Error");
+    }
+  }
+
+  async function cancel() {
+    if (es) { es.close(); es = null; }
+    await fetch("/cancel", { method: "POST" });
+    appendLine("\n[Cancelled]", "c-red");
+    setIdle("Cancelled");
+  }
+</script>
+
+</body>
+</html>

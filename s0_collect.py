@@ -74,6 +74,7 @@ def collect_new():
         )
 
     run_step("Step 4/4 — Weather data (new games)", "s3_weather.py")
+    run_step("Step 5/5 — Odds data (download latest)", "s5_odds.py")
 
     print(f"\n{'=' * 60}", flush=True)
     print("  All done! Click Retrain Model to use the new data.", flush=True)
@@ -83,10 +84,11 @@ def collect_new():
 def collect_all():
     print("NRL Data Collection — full rebuild", flush=True)
 
-    run_step("Step 1/4 — Full match history (2020→now)", "s1_history.py")
-    run_step("Step 2/4 — Advanced stats (all seasons)",  "s2_stats.py")
-    run_step("Step 3/4 — Squad info (all seasons)",      "s4_squads.py")
-    run_step("Step 4/4 — Weather data (all games)",      "s3_weather.py")
+    run_step("Step 1/5 — Full match history (2020→now)", "s1_history.py")
+    run_step("Step 2/5 — Advanced stats (all seasons)",  "s2_stats.py")
+    run_step("Step 3/5 — Squad info (all seasons)",      "s4_squads.py")
+    run_step("Step 4/5 — Weather data (all games)",      "s3_weather.py")
+    run_step("Step 5/5 — Odds data (download latest)",   "s5_odds.py")
 
     print(f"\n{'=' * 60}", flush=True)
     print("  All done! Click Retrain Model to update predictions.", flush=True)

@@ -1,0 +1,9 @@
+date,home_team,away_team,predicted_winner,home_win_prob,away_win_prob,confidence
+2026-04-09,Canterbury Bulldogs,Penrith Panthers,Penrith Panthers,8.6,91.4,91.4
+2026-04-10,St George Illawarra Dragons,Manly Sea Eagles,St George Illawarra Dragons,51.1,48.9,51.1
+2026-04-10,Brisbane Broncos,North Queensland Cowboys,Brisbane Broncos,69.3,30.7,69.3
+2026-04-11,South Sydney Rabbitohs,Canberra Raiders,Canberra Raiders,47.2,52.8,52.8
+2026-04-11,Cronulla Sharks,Sydney Roosters,Cronulla Sharks,51.5,48.5,51.5
+2026-04-11,Melbourne Storm,New Zealand Warriors,Melbourne Storm,62.3,37.7,62.3
+2026-04-12,Parramatta Eels,Gold Coast Titans,Parramatta Eels,70.1,29.9,70.1
+2026-04-12,Wests Tigers,Newcastle Knights,Wests Tigers,59.1,40.9,59.1

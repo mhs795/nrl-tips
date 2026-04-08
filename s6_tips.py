@@ -497,6 +497,39 @@ def _parse_nrl_ladder_html(html: str) -> dict:
     return ladder
 
 
+def _fetch_odds_from_csv(season: int, round_num: int) -> dict[tuple, dict]:
+    """Read odds for a specific round from nrl_source_data.csv (fallback for past rounds)."""
+    if not os.path.exists(DATA_PATH):
+        return {}
+    try:
+        cols = ['season', 'round', 'home_team', 'away_team', 
+                'market_home_win_odds', 'market_away_win_odds', 'market_home_handicap']
+        df   = pd.read_csv(DATA_PATH, usecols=cols)
+        mask = (df['season'].astype(int) == season) & (df['round'].astype(int) == round_num)
+        rows = df[mask]
+        if rows.empty:
+            return {}
+        
+        print(f"  [fallback] Loaded odds for {len(rows)} games from local CSV.")
+        odds_map = {}
+        for _, row in rows.iterrows():
+            ht = canonical(str(row['home_team']))
+            at = canonical(str(row['away_team']))
+            h_odds = float(row.get('market_home_win_odds', 0))
+            a_odds = float(row.get('market_away_win_odds', 0))
+            handicap = float(row.get('market_home_handicap', 0))
+            if h_odds > 1.0: # Valid odds are > 1.0
+                odds_map[(ht, at)] = {
+                    "home_odds": h_odds,
+                    "away_odds": a_odds,
+                    "handicap":  handicap
+                }
+        return odds_map
+    except Exception as e:
+        print(f"  [fallback] CSV odds read failed: {e}")
+        return {}
+
+
 # ─── ODDS FETCHER (optional) ──────────────────────────────────────────────────
 
 def fetch_odds() -> dict[tuple, dict]:
@@ -903,43 +936,39 @@ def run_predictions(games_df: pd.DataFrame, use_odds: bool = True) -> pd.DataFra
 
 def print_tips(results: pd.DataFrame, round_num: int, season: int, data_source: str, use_odds: bool = True):
     results = results.sort_values("date")
-    model_label = "with odds" if use_odds else "no odds"
-    print(f"\nNRL {season} — ROUND {round_num} TIPS  [{data_source}] [{model_label}]")
-    print("=" * 70)
-    model_path = MODEL_PATH if use_odds else MODEL_PATH_NO_ODDS
-    no_model = not os.path.exists(model_path)
-    if no_model:
-        print("  [odds-only mode — train the model with more historical data for better picks]\n")
+    print(f"\nROUND {round_num} TIPS")
+    
     for _, row in results.iterrows():
         tip  = row["predicted_winner"]
         conf = row["confidence"]
-        h    = f"{row['home_team']} ({row['home_win_prob']:.0f}%)"
-        a    = f"{row['away_team']} ({row['away_win_prob']:.0f}%)"
-        bar  = "█" * int((conf - 50) / 5)
-        flag = " ⚡" if conf >= 70 else ""
-        print(f"  {h:<32}  v  {a:<32}")
-        print(f"  TIP: {tip:<40} {conf:.0f}% {bar}{flag}")
-        # Squad notes
-        notes = []
+        h_prob = row['home_win_prob']
+        a_prob = row['away_win_prob']
+        
+        # Compact header: Team (Prob%) v Team (Prob%)
+        print(f"{row['home_team'][:12]} ({h_prob:.0f}%) v {row['away_team'][:12]} ({a_prob:.0f}%)")
+        
+        # Compact tip: TIP: Winner (Conf%) [Chart]
+        bar  = "█" * int((conf - 50) / 4)
+        print(f"  > {tip[:15]} {conf:.0f}% {bar}")
+        
+        # Squad notes (only if necessary)
         h_out = int(row.get("home_key_players_out", 0))
         a_out = int(row.get("away_key_players_out", 0))
-        h_names = str(row.get("home_players_out_names", "") or "")
-        a_names = str(row.get("away_players_out_names", "") or "")
-        if h_out > 0:
-            label = h_names if h_names else f"{h_out} key player{'s' if h_out>1 else ''} out"
-            notes.append(f"{row['home_team']}: {label} out")
-        if a_out > 0:
-            label = a_names if a_names else f"{a_out} key player{'s' if a_out>1 else ''} out"
-            notes.append(f"{row['away_team']}: {label} out")
-        if notes:
-            print(f"  ⚠  {' | '.join(notes)}")
-        print()
-    print("=" * 70)
+        if h_out > 0 or a_out > 0:
+            h_names = str(row.get("home_players_out_names", "") or "")
+            a_names = str(row.get("away_players_out_names", "") or "")
+            h_text = h_names if h_names else f"{h_out} out"
+            a_text = a_names if a_names else f"{a_out} out"
+            print(f"    ! {row['home_team'][:8]}: {h_text} | {row['away_team'][:8]}: {a_text}")
+        print("-" * 30)
+
     tips_list = results[["date", "home_team", "away_team", "predicted_winner", "home_win_prob", "away_win_prob", "confidence"]]
     suffix = "" if use_odds else "_no_odds"
     out_path = os.path.join(SCRIPT_DIR, f"tips_{season}_r{round_num}{suffix}.csv")
-    tips_list.to_csv(out_path, index=False)
-    print(f"Saved → {out_path}\n")
+    
+    if not os.path.exists(out_path):
+        tips_list.to_csv(out_path, index=False)
+
 
 
 # ─── AUTO-UPDATE LAST ROUND RESULTS ──────────────────────────────────────────
@@ -1050,12 +1079,14 @@ def auto_save_last_round(season: int, tips_round: int) -> bool:
 
 def retrain(use_odds: bool = True):
     """Re-train the model in-process."""
+    # Ensure we only train, do not regenerate past tips
     sys.path.insert(0, SCRIPT_DIR)
     from m5_nrl import load_data, train
     label = "with odds" if use_odds else "no odds"
     print(f"Retraining model ({label})...")
     df = load_data(DATA_PATH)
     train(df, use_odds=use_odds)
+    print(f"Retraining complete ({label}).")
 
 
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
@@ -1070,22 +1101,65 @@ def main():
 
     season   = args.season
     use_odds = not args.no_odds
+    round_num = args.round or estimate_current_round(season)
 
-    # 1. Fetch odds first so we can find the right round (skipped in no-odds mode)
+    # 1. Check for existing snapshot (historical record)
+    suffix = "" if use_odds else "_no_odds"
+    snapshot_path = os.path.join(SCRIPT_DIR, f"tips_{season}_r{round_num}{suffix}.csv")
+    if os.path.exists(snapshot_path):
+        # Use snapshot if round has started (or it's a historical record)
+        games = fetch_draw_nrlcom(season, round_num)
+        started = False
+        if games:
+            today = datetime.now().date()
+            for g in games:
+                g_date = g.get("date", "")
+                if g_date and g_date < str(today):
+                    started = True
+                    break
+        
+        if started:
+            print(f"\n[Snapshot found: {os.path.basename(snapshot_path)} (round has started)]")
+            try:
+                results = pd.read_csv(snapshot_path)
+                # Add placeholders for squad info if missing in CSV
+                for col in ["home_key_players_out", "away_key_players_out", "home_players_out_names", "away_players_out_names"]:
+                    if col not in results.columns:
+                        results[col] = 0 if "out" in col and "names" not in col else ""
+                print_tips(results, round_num, season, "historical snapshot", use_odds=use_odds)
+                return
+            except Exception as e:
+                print(f"  [warning] Could not read snapshot: {e} — regenerating...")
+        else:
+            print(f"\n[Snapshot found: {os.path.basename(snapshot_path)}, but round has not started. Regenerating...]")
+
+    # 2. Fetch odds (skipped in no-odds mode)
     odds_map = {}
-    if use_odds and ODDS_API_KEY:
-        print("Fetching odds...")
-        odds_map = fetch_odds()
-        print(f"  Odds loaded for {len(odds_map)} games.")
-    elif not use_odds:
+    if use_odds:
+        if round_num < estimate_current_round(season):
+            # For past rounds, always prioritize historical odds from CSV
+            odds_map = _fetch_odds_from_csv(season, round_num)
+        
+        if not odds_map and ODDS_API_KEY:
+            # Try live API if no CSV odds found or if current/future round
+            print("Fetching live odds...")
+            odds_map = fetch_odds()
+            if odds_map:
+                print(f"  Live odds loaded for {len(odds_map)} games.")
+        
+        if not odds_map:
+            # Final fallback to CSV if API failed
+            odds_map = _fetch_odds_from_csv(season, round_num)
+    else:
         print("  [no-odds mode — skipping live odds fetch]")
 
-    round_num = args.round or best_round_for_odds(season, odds_map)
-
-    # 2. Auto-save last round's results and retrain if anything new
+    # 3. Auto-save last round's results and retrain if anything new
     new_data = auto_save_last_round(season, round_num)
     if new_data:
+        print("New results detected. Retraining models...")
         retrain(use_odds=use_odds)
+    else:
+        print("No new results to save. Skipping retrain.")
 
     print(f"\nFetching NRL {season} Round {round_num} draw...")
 

@@ -80,6 +80,14 @@ def fetch_match_stats(match_centre_url: str) -> dict | None:
             if t is not None and mt is not None and (t + mt) > 0:
                 s["tackle_eff"] = round(t / (t + mt) * 100, 2)
 
+        # Tries from scoring data (not in stats groups)
+        home_tries = data.get("homeTeam", {}).get("scoring", {}).get("tries", {}).get("made")
+        away_tries = data.get("awayTeam", {}).get("scoring", {}).get("tries", {}).get("made")
+        if home_tries is not None:
+            home_stats["tries_pg"] = float(home_tries)
+        if away_tries is not None:
+            away_stats["tries_pg"] = float(away_tries)
+
         return {"home": home_stats, "away": away_stats}
     except Exception:
         return None
@@ -134,18 +142,19 @@ def build_round_url_cache(season: int, round_num: int) -> dict[tuple, str]:
 STAT_COLS = [
     "home_completion_rate", "home_errors_pg", "home_penalties_pg",
     "home_tackle_eff", "home_line_breaks_pg",
-    "home_post_contact_metres_pg", "home_kick_metres_pg",
+    "home_post_contact_metres_pg", "home_kick_metres_pg", "home_tries_pg",
     "away_completion_rate", "away_errors_pg", "away_penalties_pg",
     "away_tackle_eff", "away_line_breaks_pg",
-    "away_post_contact_metres_pg", "away_kick_metres_pg",
+    "away_post_contact_metres_pg", "away_kick_metres_pg", "away_tries_pg",
 ]
 
 
 def needs_stats(row) -> bool:
-    """True if this row is missing any advanced stats."""
+    """True if this row is missing any advanced stats (including tries)."""
     return (
         all(row.get(c, 0) == 0 for c in STAT_COLS)
         or row.get("home_kick_metres_pg", 0) == 0
+        or row.get("home_tries_pg", 0) == 0
     )
 
 

@@ -6,6 +6,7 @@ Run with:  python gui.py
 """
 
 import os
+import re
 import sys
 
 from PyQt6.QtCore import QProcess, Qt
@@ -15,11 +16,16 @@ from PyQt6.QtWidgets import (
     QProgressBar, QPushButton, QStatusBar, QTextEdit, QVBoxLayout, QWidget,
 )
 
-SCRIPT_DIR   = os.path.dirname(os.path.abspath(__file__))
-AUTO_TIP     = os.path.join(SCRIPT_DIR, "s6_tips.py")
-TRAIN_CMD    = os.path.join(SCRIPT_DIR, "m5_nrl.py")
-COLLECT_CMD  = os.path.join(SCRIPT_DIR, "s0_collect.py")
-PERF_CMD     = os.path.join(SCRIPT_DIR, "s9_performance.py")
+import subprocess as _subprocess
+
+SCRIPT_DIR        = os.path.dirname(os.path.abspath(__file__))
+AUTO_TIP          = os.path.join(SCRIPT_DIR, "s6_tips.py")
+TRAIN_CMD         = os.path.join(SCRIPT_DIR, "m5_nrl.py")
+COLLECT_CMD       = os.path.join(SCRIPT_DIR, "s0_collect.py")
+PERF_CMD          = os.path.join(SCRIPT_DIR, "s9_performance.py")
+EXPORT_CMD        = os.path.join(SCRIPT_DIR, "export_android.py")
+MODEL_INFO_ODDS   = os.path.join(SCRIPT_DIR, "nrl_model_info.json")
+MODEL_INFO_NO_ODDS = os.path.join(SCRIPT_DIR, "nrl_model_no_odds_info.json")
 
 # ── Palette ──────────────────────────────────────────────────────────────────
 BG      = "#1a1a2e"
@@ -37,8 +43,14 @@ class NRLTipsWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("NRL Tips")
         self.setWindowIcon(QIcon(os.path.join(SCRIPT_DIR, "rugby_ball.svg")))
-        self.resize(900, 700)
+        self.resize(800, 700)
         self._process: QProcess | None = None
+        self._pending_no_odds = False  # set True if we still need to run the no-odds model
+        self._pending_export  = False  # set True after retrain to trigger export+push
+        self._web_server = _subprocess.Popen(
+            [sys.executable, os.path.join(SCRIPT_DIR, "web_gui.py")],
+            cwd=SCRIPT_DIR,
+        )
         self._build_ui()
         self._centre()
 
@@ -68,35 +80,49 @@ class NRLTipsWindow(QMainWindow):
         # ── Toolbar ───────────────────────────────────────────────────────────
         bar = QWidget()
         bar.setStyleSheet(f"background-color: {PANEL};")
-        bar_layout = QHBoxLayout(bar)
-        bar_layout.setContentsMargins(16, 8, 16, 8)
-        bar_layout.setSpacing(8)
+        bar_outer = QVBoxLayout(bar)
+        bar_outer.setContentsMargins(16, 8, 16, 8)
+        bar_outer.setSpacing(6)
 
-        self.btn_tips         = self._make_button("Get This Week's Tips", GREEN, "#000", self._get_tips)
-        self.btn_perf         = self._make_button("Check Last Week's Tips", "#6c5ce7", WHITE, self._check_performance)
-        self.btn_collect_new  = self._make_button("Collect New Data", YELLOW, "#000", self._collect_new_data)
-        self.btn_collect_all  = self._make_button("Collect All Data", "#e17055", WHITE, self._collect_all_data)
-        self.btn_train        = self._make_button("Retrain Model", ACCENT, WHITE, self._retrain)
-        self.btn_cancel       = self._make_button("Cancel", RED, WHITE, self._cancel)
-        self.btn_clear        = self._make_button("Clear", PANEL, GREY, self._clear)
+        self.btn_tips          = self._make_button("Tips (with Odds)", "#1565c0", WHITE, self._get_tips)
+        self.btn_tips_no_odds  = self._make_button("Tips (No Odds)", "#1e88e5", "#000", self._get_tips_no_odds)
+        self.btn_compare       = self._make_button("Compare Models", "#64b5f6", "#000", self._compare_models)
+        self.btn_show_model        = self._make_button("Show Models", "#004d40", WHITE, self._show_model_both)
+        self.btn_collect_new   = self._make_button("Collect New Data", "#00796b", WHITE, self._collect_new_data)
+        self.btn_collect_all   = self._make_button("Collect All Data", "#00897b", "#000", self._collect_all_data)
+        self.btn_train_all     = self._make_button("Retrain and Export All", "#26a69a", "#000", self._retrain_all)
+        self.btn_cancel        = self._make_button("Cancel", RED, WHITE, self._cancel)
+        self.btn_clear         = self._make_button("Clear", PANEL, GREY, self._clear)
         self.btn_cancel.hide()
 
-        bar_layout.addWidget(self.btn_tips)
-        bar_layout.addWidget(self.btn_perf)
-        bar_layout.addWidget(self.btn_collect_new)
-        bar_layout.addWidget(self.btn_collect_all)
-        bar_layout.addWidget(self.btn_train)
-        bar_layout.addWidget(self.btn_cancel)
-        bar_layout.addWidget(self.btn_clear)
-        bar_layout.addStretch()
-
-        bar_layout.addWidget(QLabel("Round:"))
+        # Row 1: tips + perf + round input
+        row1 = QHBoxLayout()
+        row1.setSpacing(8)
+        row1.addWidget(self.btn_tips)
+        row1.addWidget(self.btn_tips_no_odds)
+        row1.addWidget(self.btn_compare)
+        row1.addStretch()
+        row1.addWidget(QLabel("Round:"))
         self.round_input = QLineEdit("auto")
         self.round_input.setFixedWidth(60)
         self.round_input.setStyleSheet(
             f"background:{ACCENT}; color:{WHITE}; border:none; padding:4px; border-radius:4px;"
         )
-        bar_layout.addWidget(self.round_input)
+        row1.addWidget(self.round_input)
+
+        # Row 2: data + train + cancel/clear
+        row2 = QHBoxLayout()
+        row2.setSpacing(8)
+        row2.addWidget(self.btn_show_model)
+        row2.addWidget(self.btn_collect_new)
+        row2.addWidget(self.btn_collect_all)
+        row2.addWidget(self.btn_train_all)
+        row2.addWidget(self.btn_cancel)
+        row2.addWidget(self.btn_clear)
+        row2.addStretch()
+
+        bar_outer.addLayout(row1)
+        bar_outer.addLayout(row2)
         layout.addWidget(bar)
 
         # ── Output ────────────────────────────────────────────────────────────
@@ -140,6 +166,11 @@ class NRLTipsWindow(QMainWindow):
         btn.clicked.connect(handler)
         return btn
 
+    def closeEvent(self, event):
+        self._web_server.terminate()
+        self._web_server.wait()
+        super().closeEvent(event)
+
     def _centre(self):
         screen = QApplication.primaryScreen().geometry()
         x = (screen.width()  - self.width())  // 2
@@ -153,7 +184,14 @@ class NRLTipsWindow(QMainWindow):
         rnd = self.round_input.text().strip()
         if rnd and rnd.lower() != "auto" and rnd.isdigit():
             args = ["--round", rnd]
-        self._run(sys.executable, [AUTO_TIP] + args, "Fetching tips...")
+        self._run(sys.executable, [AUTO_TIP] + args, "Fetching tips (with odds)...")
+
+    def _get_tips_no_odds(self):
+        args = ["--no-odds"]
+        rnd = self.round_input.text().strip()
+        if rnd and rnd.lower() != "auto" and rnd.isdigit():
+            args += ["--round", rnd]
+        self._run(sys.executable, [AUTO_TIP] + args, "Fetching tips (no odds)...")
 
     def _collect_new_data(self):
         """Fetch only new rounds + missing stats/squads — fast incremental update."""
@@ -168,16 +206,70 @@ class NRLTipsWindow(QMainWindow):
         rnd = self.round_input.text().strip()
         if rnd and rnd.lower() != "auto" and rnd.isdigit():
             args = ["--round", rnd]
-        self._run(sys.executable, [PERF_CMD] + args, "Checking last week's tips...")
+        self._run(sys.executable, [PERF_CMD] + args, "Checking results (with odds)...")
 
-    def _retrain(self):
-        self._run(sys.executable, [TRAIN_CMD, "--train"], "Training model...")
+    def _check_performance_no_odds(self):
+        args = ["--no-odds"]
+        rnd = self.round_input.text().strip()
+        if rnd and rnd.lower() != "auto" and rnd.isdigit():
+            args += ["--round", rnd]
+        self._run(sys.executable, [PERF_CMD] + args, "Checking results (no odds)...")
 
-    def _run(self, program: str, args: list, label: str):
+    def _compare_models(self):
+        args = ["--compare"]
+        rnd = self.round_input.text().strip()
+        if rnd and rnd.lower() != "auto" and rnd.isdigit():
+            args += ["--round", rnd]
+        self._run(sys.executable, [PERF_CMD] + args, "Comparing models...")
+
+    def _show_model_both(self):
+        import json
+        self._clear()
+
+        def load(path, label):
+            if not os.path.exists(path):
+                return [f"[{label}] No model info found — run Retrain first."]
+            with open(path) as f:
+                d = json.load(f)
+            lines = [
+                f"=== {label} ===",
+                f"  Trained:           {d.get('trained_at', 'unknown')}",
+                f"  CV accuracy:       {d['cv_accuracy']:.3f} ± {d['cv_std']:.3f}",
+                f"  Training accuracy: {d['train_accuracy']:.3f}",
+                f"  Brier score:       {d['brier_score']:.4f}  (lower = better; random ≈ 0.25)",
+                "",
+                "  Top features:",
+            ]
+            for feat in d.get("features", []):
+                bar = "█" * int(feat["importance"] * 200)
+                lines.append(f"    {feat['name']:<35} {bar} ({feat['importance']:.4f})")
+            return lines
+
+        odds_lines    = load(MODEL_INFO_ODDS,    "With Odds")
+        no_odds_lines = load(MODEL_INFO_NO_ODDS, "No Odds")
+
+        col_width = max((len(l) for l in odds_lines), default=40)
+        col_width = max(col_width, 40)
+        n   = max(len(odds_lines), len(no_odds_lines))
+        sep = "─" * col_width + "  │  " + "─" * 40
+        self._append_line(f"{'── With Odds ──':<{col_width}}  │  ── No Odds ──")
+        self._append_line(sep)
+        for i in range(n):
+            left  = odds_lines[i]    if i < len(odds_lines)    else ""
+            right = no_odds_lines[i] if i < len(no_odds_lines) else ""
+            self._append_line(f"{left:<{col_width}}  │  {right}")
+
+    def _retrain_all(self):
+        self._pending_no_odds = True
+        self._pending_export  = True
+        self._run(sys.executable, [TRAIN_CMD, "--train"], "Training model (with odds)...")
+
+    def _run(self, program: str, args: list, label: str, clear: bool = True):
         if self._process and self._process.state() != QProcess.ProcessState.NotRunning:
             self._append("[busy — already running, please wait]\n", RED)
             return
-        self._clear()
+        if clear:
+            self._clear()
         self._set_busy(label)
 
         env = self._process_env()
@@ -213,12 +305,35 @@ class NRLTipsWindow(QMainWindow):
             self._append("\n[Cancelled]\n", RED)
 
     def _on_finished(self, exit_code, _):
-        if exit_code == -2 or exit_code == 15 or exit_code == 9:
-            # Killed by cancel
+        if exit_code in (-2, 9, 15):
+            self._pending_no_odds = False
+            self._pending_export  = False
             self._set_idle("Cancelled")
+            return
+
+        if exit_code != 0:
+            self._pending_no_odds = False
+            self._pending_export  = False
+            self._set_idle(f"Finished with errors (exit {exit_code})")
+            return
+
+        # Successful finish — check if we still need to run no-odds model
+        if self._pending_no_odds:
+            self._pending_no_odds = False
+            self._append("\n" + "─" * 50 + "\n", "#636e72")
+            self._run(sys.executable, [TRAIN_CMD, "--train", "--no-odds"],
+                      "Training model (no odds)...", clear=False)
+            return
+
+        # Successful finish — check if we should export + push to Android
+        if self._pending_export:
+            self._pending_export = False
+            self._append("\n" + "─" * 50 + "\n", "#636e72")
+            self._run(sys.executable, [EXPORT_CMD],
+                      "Exporting models to Android & pushing to GitHub...",
+                      clear=False)
         else:
-            msg = "Done" if exit_code == 0 else f"Finished with errors (exit {exit_code})"
-            self._set_idle(msg)
+            self._set_idle("Done")
 
     # ── Output helpers ────────────────────────────────────────────────────────
 
@@ -235,8 +350,8 @@ class NRLTipsWindow(QMainWindow):
             return GREEN
         if "⚡" in l:
             return YELLOW
-        if l.startswith("[") or "Could not" in l or "error" in l.lower():
-            return RED if "error" in l.lower() else GREY
+        if l.startswith("[") or "Could not" in l or re.search(r'\berror\b', l, re.IGNORECASE):
+            return RED if re.search(r'\berror\b', l, re.IGNORECASE) else GREY
         return WHITE
 
     def _append(self, text: str, colour: str = WHITE, bold: bool = False):
@@ -256,7 +371,9 @@ class NRLTipsWindow(QMainWindow):
 
     def _set_busy(self, msg: str):
         self.status_label.setText(msg)
-        for btn in (self.btn_tips, self.btn_perf, self.btn_collect_new, self.btn_collect_all, self.btn_train):
+        for btn in (self.btn_tips, self.btn_tips_no_odds,
+                    self.btn_collect_new, self.btn_collect_all,
+                    self.btn_train_all):
             btn.setEnabled(False)
         self.btn_cancel.show()
         self.progress.setRange(0, 0)
@@ -264,7 +381,9 @@ class NRLTipsWindow(QMainWindow):
 
     def _set_idle(self, msg: str = "Ready"):
         self.status_label.setText(msg)
-        for btn in (self.btn_tips, self.btn_perf, self.btn_collect_new, self.btn_collect_all, self.btn_train):
+        for btn in (self.btn_tips, self.btn_tips_no_odds,
+                    self.btn_collect_new, self.btn_collect_all,
+                    self.btn_train_all):
             btn.setEnabled(True)
         self.btn_cancel.hide()
         self.progress.hide()
@@ -272,6 +391,7 @@ class NRLTipsWindow(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
+    app.setApplicationName("nrl-tips")
     app.setStyle("Fusion")
     win = NRLTipsWindow()
     win.show()

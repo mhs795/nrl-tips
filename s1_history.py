@@ -435,8 +435,7 @@ def _fetch_new_rounds(last_season: int, last_round: int) -> list[dict]:
         except Exception:
             rounds = list(range(1, 28))
 
-        start_rnd = (last_round + 1) if season == last_season else 1
-        for rnd in (r for r in rounds if r >= start_rnd):
+        for rnd in rounds:
             games = fetch_round(season, rnd)
             if games:
                 print(f"  R{rnd}: {len(games)} games", end="  ", flush=True)

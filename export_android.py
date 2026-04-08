@@ -66,22 +66,17 @@ def export_pkl_to_npz(pkl_path: str, npz_path: str):
 
         for i in range(n_trees):
             tree = gbc.estimators_[i, 0].tree_
-            cl_list.append(tree.children_left.astype(np.int32))
-            cr_list.append(tree.children_right.astype(np.int32))
-            feat_list.append(tree.feature.astype(np.int32))
-            thr_list.append(tree.threshold.astype(np.float32))
-            val_list.append(tree.value[:, 0, 0].astype(np.float32))
+            arrays[f"f{fi}_t{i}_cl"]   = tree.children_left.astype(np.int32)
+            arrays[f"f{fi}_t{i}_cr"]   = tree.children_right.astype(np.int32)
+            arrays[f"f{fi}_t{i}_feat"] = tree.feature.astype(np.int32)
+            arrays[f"f{fi}_t{i}_thr"]  = tree.threshold.astype(np.float32)
+            arrays[f"f{fi}_t{i}_val"]  = tree.value[:, 0, 0].astype(np.float32)
 
         arrays[f"f{fi}_lr"]      = np.array([gbc.learning_rate])
         arrays[f"f{fi}_init"]    = np.array([init_val])
         arrays[f"f{fi}_n_trees"] = np.array([n_trees])
         arrays[f"f{fi}_iso_x"]   = iso_x
         arrays[f"f{fi}_iso_y"]   = iso_y
-        arrays[f"f{fi}_cl"]      = np.array(cl_list,   dtype=object)
-        arrays[f"f{fi}_cr"]      = np.array(cr_list,   dtype=object)
-        arrays[f"f{fi}_feat"]    = np.array(feat_list, dtype=object)
-        arrays[f"f{fi}_thr"]     = np.array(thr_list,  dtype=object)
-        arrays[f"f{fi}_val"]     = np.array(val_list,  dtype=object)
 
     np.savez(npz_path, **arrays)
 
@@ -155,8 +150,10 @@ def _bundle_tip_caches() -> list[str]:
             model   = "no_odds" if no_odds else "odds"
             fname   = f"tips_cache_{now_year}_R{rnd:02d}_{model}.txt"
             dst     = os.path.join(ANDROID_DIR, fname)
-            cmd     = [sys.executable, tip_script,
-                       "--season", str(now_year), "--round", str(rnd)]
+            
+            # 1. Copy the text cache (for _run_tips_cached in main.py)
+            cmd = [sys.executable, tip_script,
+                   "--season", str(now_year), "--round", str(rnd)]
             if no_odds:
                 cmd.append("--no-odds")
             try:
@@ -173,6 +170,19 @@ def _bundle_tip_caches() -> list[str]:
                     print(f"  [skip] {fname} — script returned no output")
             except Exception as e:
                 print(f"  [skip] {fname} — {e}")
+
+            # 2. Also copy the CSV file (for s9_performance.py / Compare Models)
+            # Desktop s6_tips.py creates e.g. tips_2026_r1.csv and tips_2026_r1_no_odds.csv
+            csv_suffix = "_no_odds" if no_odds else ""
+            csv_name   = f"tips_{now_year}_r{rnd}{csv_suffix}.csv"
+            src_csv    = os.path.join(SCRIPT_DIR, csv_name)
+            dst_csv    = os.path.join(ANDROID_DIR, csv_name)
+
+            if os.path.exists(src_csv):
+                shutil.copy(src_csv, dst_csv)
+                if csv_name not in copied:
+                    copied.append(csv_name)
+                print(f"  {csv_name}")
 
     return copied
 
